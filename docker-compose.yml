@@ -11,10 +11,11 @@ services:
     ports:
       - "9870:9870" # Web UI for Namenode
       - "9000:9000" # RPC Port for Hadoop
+      - "8020:8020"  # HDFS NameNode RPC Port
     volumes:
       - namenode-data:/hadoop/dfs/namenode
         - ./Makefile:/opt/hadoop/Makefile
-      -  /Users/naduniweerasinghe/NbaAnalysis/src/main/java/com/NbaAnalysis/data:/opt/hadoop/resources
+      -  /Users/naduniweerasinghe/NbaAnalysis/src/main/resources:/opt/hadoop/resources
     networks:
       - hadoop
 
@@ -49,9 +50,98 @@ services:
     networks:
       - hadoop
 
+  hive-metastore-postgresql:
+    image: postgres:10
+    container_name: hive-metastore-postgresql
+    platform: linux/amd64  # Force x86 compatibility if needed
+    environment:
+      POSTGRES_DB: metastore
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+    networks:
+      - hadoop
+    volumes:
+      - metastore-data:/var/lib/postgresql/data
+
+  hive-metastore:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    platform: linux/amd64  # Force x86 compatibility if needed
+    container_name: hive-metastore
+    environment:
+      - HIVE_METASTORE_URI=thrift://hive-metastore:9083
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+      - HIVE_SITE_conf_hive_metastore_uris=thrift://hive-metastore:9083
+    depends_on:
+      - namenode
+      - datanode
+      - hive-metastore-postgresql
+    ports:
+      - "9083:9083" # Hive Metastore Thrift
+    networks:
+      - hadoop
+
+  hive-server:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    platform: linux/amd64  # Force x86 compatibility if needed
+    container_name: hive-server
+    environment:
+      - HIVE_METASTORE_URI=thrift://hive-metastore:9083
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+    depends_on:
+      - hive-metastore
+    ports:
+      - "10000:10000" # HiveServer2 Thrift
+    networks:
+      - hadoop
+
+  spark-master:
+    image: bde2020/spark-master:3.1.1-hadoop3.2
+    platform: linux/amd64  # Force x86 compatibility if needed 
+    container_name: spark-master
+    environment:
+      - SPARK_MODE=master
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+    ports:
+      - "8080:8080" # Spark Master Web UI
+      - "7077:7077" # Spark Master RPC
+    networks:
+      - hadoop
+
+  spark-worker:
+    image: bde2020/spark-worker:3.1.1-hadoop3.2
+    platform: linux/amd64  # Force x86 compatibility if needed
+    container_name: spark-worker
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+    depends_on:
+      - spark-master
+    ports:
+      - "8081:8081" # Spark Worker Web UI
+    networks:
+      - hadoop
+
+  zeppelin:
+    image: apache/zeppelin:0.10.1
+    platform: linux/amd64  # Force x86 compatibility if needed
+    container_name: zeppelin
+    environment:
+      - ZEPPELIN_ADDR=0.0.0.0
+      - ZEPPELIN_PORT=8085
+      - SPARK_MASTER=spark://spark-master:7077
+      - SPARK_HOME=/spark
+    ports:
+      - "8085:8085" # Zeppelin Notebook UI
+    depends_on:
+      - spark-master
+      - spark-worker
+    networks:
+      - hadoop
+
 volumes:
   namenode-data:
   datanode-data:
+  metastore-data:
 
 networks:
   hadoop:
