@@ -11,7 +11,6 @@ services:
     ports:
       - "9870:9870" # Web UI for Namenode
       - "9000:9000" # RPC Port for Hadoop
-      - "8020:8020"  # HDFS NameNode RPC Port
     volumes:
       - namenode-data:/hadoop/dfs/namenode
         - ./Makefile:/opt/hadoop/Makefile
@@ -50,47 +49,40 @@ services:
     networks:
       - hadoop
 
-  hive-metastore-postgresql:
-    image: postgres:10
-    container_name: hive-metastore-postgresql
+  hive-server:
+    image: bde2020/hive:2.1.0-postgresql-metastore
     platform: linux/amd64  # Force x86 compatibility if needed
+    container_name: hive-server
     environment:
-      POSTGRES_DB: metastore
-      POSTGRES_USER: hive
-      POSTGRES_PASSWORD: hive
-    networks:
-      - hadoop
-    volumes:
-      - metastore-data:/var/lib/postgresql/data
-
-  hive-metastore:
-    image: bde2020/hive:2.3.2-postgresql-metastore
-    platform: linux/amd64  # Force x86 compatibility if needed
-    container_name: hive-metastore
-    environment:
-      - HIVE_METASTORE_URI=thrift://hive-metastore:9083
-      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
-      - HIVE_SITE_conf_hive_metastore_uris=thrift://hive-metastore:9083
+      - "HIVE_CORE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore/metastore"
+    env_file:
+      - ./hadoop-hive.env
     depends_on:
+      - hive-metastore
+      - resourcemanager
+      - nodemanager
       - namenode
       - datanode
       - hive-metastore-postgresql
     ports:
-      - "9083:9083" # Hive Metastore Thrift
+      - "10000:10000" # HiveServer2 Thrift
     networks:
       - hadoop
 
-  hive-server:
-    image: bde2020/hive:2.3.2-postgresql-metastore
+  hive-metastore:
+    image: bde2020/hive:2.1.0-postgresql-metastore
     platform: linux/amd64  # Force x86 compatibility if needed
-    container_name: hive-server
-    environment:
-      - HIVE_METASTORE_URI=thrift://hive-metastore:9083
-      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
-    depends_on:
-      - hive-metastore
-    ports:
-      - "10000:10000" # HiveServer2 Thrift
+    container_name: hive-metastore
+    env_file:
+      - ./hadoop-hive.env
+    command: /opt/hive/bin/hive --service metastore
+    networks:
+      - hadoop
+
+  hive-metastore-postgresql:
+    image: bde2020/hive-metastore-postgresql:2.1.0
+    container_name: hive-metastore-postgresql
+    platform: linux/amd64  # Force x86 compatibility if needed
     networks:
       - hadoop
 
@@ -104,6 +96,8 @@ services:
     ports:
       - "8080:8080" # Spark Master Web UI
       - "7077:7077" # Spark Master RPC
+    volumes:
+      - /Users/naduniweerasinghe/NbaAnalysis/resources:/tmp
     networks:
       - hadoop
 
@@ -118,6 +112,8 @@ services:
       - spark-master
     ports:
       - "8081:8081" # Spark Worker Web UI
+    volumes:
+      -  /Users/naduniweerasinghe/NbaAnalysis/src/main/resources:/opt/spark/resources
     networks:
       - hadoop
 
@@ -135,6 +131,16 @@ services:
     depends_on:
       - spark-master
       - spark-worker
+    networks:
+      - hadoop
+
+  hue:
+    image: bde2020/hdfs-filebrowser:3.11
+    platform: linux/amd64
+    ports:
+      - 8089:8089
+    environment:
+      - NAMENODE_HOST=namenode
     networks:
       - hadoop
 

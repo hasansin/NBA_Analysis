@@ -1,14 +1,12 @@
 package com.NbaAnalysis;
 
 import com.NbaAnalysis.Executors.MostScoreExecutor;
+import com.NbaAnalysis.Executors.PlayerScoreExecutor;
 import com.NbaAnalysis.Executors.TeamQuarterScoreExecutor;
 import com.NbaAnalysis.Executors.TeamScoreExecutor;
 
-// import com.NbaAnalysis.Executors.MostScoreExecutor;
-// import com.NbaAnalysis.Executors.QuarterScoreExecutor;
-
 /**
- * app.java
+ * Mainjava
  *
  */
 public class Main {
@@ -38,6 +36,16 @@ public class Main {
 
         }
         System.out.println("Team Score Job Completed Successfully");
+
+
+          // // Run the job for Team Score for hive query
+          boolean playerScoreSuccess = PlayerScoreExecutor.runJob(args);
+          if (!playerScoreSuccess) {
+              System.out.println("Failed to complete Player Score Job");
+              System.exit(1);
+  
+          }
+          System.out.println("Player Score Job Completed Successfully");
 
         System.exit(0); // Success
     }

@@ -16,7 +16,7 @@ import com.NbaAnalysis.Reducers.TeamScoreReducer;
 public class TeamScoreExecutor {
         public static boolean runJob(String[]args) throws Exception {
         Configuration conf = new Configuration();
-        Job job = Job.getInstance(conf, "Highest Scoring Quarter per Team");
+        Job job = Job.getInstance(conf, "Score Quarter Team");
 
         job.setJarByClass(TeamScoreExecutor.class);
         job.setMapperClass(TeamScoreMapper.class);
