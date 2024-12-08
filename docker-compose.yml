@@ -93,11 +93,16 @@ services:
     environment:
       - SPARK_MODE=master
       - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+      - SPARK_CONF_spark.sql.shuffle.partitions=200
+      - SPARK_CONF_spark.task.maxFailures=10
+      - SPARK_CONF_spark.speculation=true
+      - SPARK_CONF_spark.local.dir=/tmp/spark
     ports:
       - "8080:8080" # Spark Master Web UI
       - "7077:7077" # Spark Master RPC
     volumes:
       - /Users/naduniweerasinghe/NbaAnalysis/resources:/tmp
+      - /Users/naduniweerasinghe/NbaAnalysis/spark-output:/spark-output 
     networks:
       - hadoop
 
@@ -114,6 +119,7 @@ services:
       - "8081:8081" # Spark Worker Web UI
     volumes:
       -  /Users/naduniweerasinghe/NbaAnalysis/src/main/resources:/opt/spark/resources
+      - /Users/naduniweerasinghe/NbaAnalysis/spark-output:/spark-output 
     networks:
       - hadoop
 
@@ -143,11 +149,59 @@ services:
       - NAMENODE_HOST=namenode
     networks:
       - hadoop
+  # PostgreSQL (Database for Superset)
+  db:
+    image: postgres:latest
+    container_name: db
+    environment:
+      - POSTGRES_USER=superset
+      - POSTGRES_PASSWORD=superset
+      - POSTGRES_DB=superset
+    networks:
+      - hadoop
+
+ # Apache Superset
+  superset:
+    image: apache/superset:latest
+    container_name: superset
+    environment:
+      - SUPERSET_SECRET_KEY=b7a7fa093c8e89c3a432a0049bdf0e6d
+      - DATABASE_URL=postgresql+psycopg2://superset:superset@db:5432/superset
+      - REDIS_URL=redis://redis:6379/0
+      - ENABLE_CSV_UPLOAD=True
+    ports:
+      - "8086:8088"  # Superset UI
+    depends_on:
+      - hive-metastore
+      - spark-master
+      - db
+    volumes:
+      - superset_home:/app/superset_home
+      - /Users/naduniweerasinghe/NbaAnalysis/uploads:/app/superset_uploads
+      - ./superset_config.py:/app/pythonpath/superset_config.py  # Mount the custom config
+    command: >
+      /bin/bash -c "
+      pip install psycopg2-binary &&
+      superset db upgrade &&
+      superset load_examples &&
+      superset init &&
+      superset run -p 8088 -h 0.0.0.0"
+    networks:
+      - hadoop
+
+  # Redis (Used by Superset for caching)
+  redis:
+    image: redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
 
 volumes:
   namenode-data:
   datanode-data:
   metastore-data:
+  superset_home:
+  db_data:
 
 networks:
   hadoop:

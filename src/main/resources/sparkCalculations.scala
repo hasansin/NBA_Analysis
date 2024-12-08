@@ -54,8 +54,27 @@ object NbaAnalysis {
 
     val totalPlayers = playerScores.select("PLAYER_NAME").distinct().count()
     val total40PlusPlayers = playersWith40Plus.count()
-    val percentage = (total40PlusPlayers.toDouble / totalPlayers) * 100
+    val percentage : Double = (total40PlusPlayers.toDouble / totalPlayers) * 100
+    val respercentage : Double = ((totalPlayers.toDouble - total40PlusPlayers.toDouble) / totalPlayers) * 100
+
     println(f"Percentage of players scoring 40+ points: $percentage%.2f%%")
+
+    val data = Seq(
+      ("Percentage of players have  scored 40+ points in each game", f"$percentage%.2f%%"),
+      ("Percentage of players have not scored 40+ points in each game", f"$respercentage%.2f%%") 
+    )
+
+    // Create a DataFrame from the sequence of the single row
+    val percentageDF = spark.createDataFrame(data).toDF("Description", "Percentage")
+
+    percentageDF.show(truncate = false)
+    percentageDF
+    .repartition(1) 
+    .write
+    .option("header", "true")  // Include column headers
+    .csv("/spark-output/PercentageOfPlayersAbove40")  // Path inside the container
+
+
 
     // Aggregate total points scored by each team in each match
     val teamScores = cleanedDF.groupBy("GAME_ID", "TEAM_NAME")
@@ -90,13 +109,34 @@ object NbaAnalysis {
         col("LOSER.TEAM_NAME").as("LOSING_TEAM")
       )
 
+    val matchesWon = matchResults.groupBy("WINNING_TEAM")
+      .count()
+      .withColumnRenamed("WINNING_TEAM", "TEAM_NAME")
+      .withColumnRenamed("count", "MATCHES_WON")
+
     // Count the number of matches lost by each team
     val matchesLost = flattenedLosers.groupBy("LOSING_TEAM")
       .count()
       .withColumnRenamed("count", "MATCHES_LOST")
 
+   val matchesLostRenamed = matchesLost.withColumnRenamed("LOSING_TEAM", "TEAM_NAME")
+   val matchesSummary = matchesWon.join(matchesLostRenamed, Seq("TEAM_NAME"), "outer").na.fill(0)
+
     // Show the results
     matchesLost.show(truncate = false)
+    matchesLost
+    .repartition(1) 
+    .write
+    .option("header", "true")  // Include column headers
+    .csv("/spark-output/MatchesLost")  // Path inside the container
+
+    matchesSummary.show(truncate = false)
+    matchesSummary
+    .repartition(1) 
+    .write
+    .option("header", "true")  // Include column headers
+    .csv("/spark-output/MatchesSummary")  // Path inside the container
+
 
 
     // Stop Spark session

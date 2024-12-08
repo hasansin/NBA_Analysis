@@ -111,15 +111,30 @@ object BasketballPrediction {
     // Step 7: Make predictions
     val predictions = lrModel.transform(testData)
 
-    predictions.select("PLAYER_NAME", "WINNING_TEAM", "LOSING_TEAM", "prediction").show(truncate = false)
+    val modelPrediction = predictions.select("PLAYER_NAME", "WINNING_TEAM", "LOSING_TEAM", "prediction")
+    
+    modelPrediction.show(truncate = false)
+
+    modelPrediction.repartition(1)  // Ensures a single partition
+    .write
+    .option("header", "true")
+    .csv("/spark-output/modelPredictions");
 
     // Step 8: Evaluate the model
+  import org.apache.spark.sql.functions._
+
+  val cleanedPredictions = predictions
+    .filter(col("label").isNotNull && col("prediction").isNotNull) // Ensure no nulls
+    .filter(!col("label").isNaN && !col("prediction").isNaN) // Filter out NaN values
+    .filter(!(col("label") === Double.PositiveInfinity || col("label") === Double.NegativeInfinity)) // Filter out infinite values in label
+    .filter(!(col("prediction") === Double.PositiveInfinity || col("prediction") === Double.NegativeInfinity)) // Filter out infinite values in prediction
+
     val evaluator = new RegressionEvaluator()
       .setLabelCol("label")
       .setPredictionCol("prediction")
       .setMetricName("rmse")
 
-    val rmse = evaluator.evaluate(predictions)
+    val rmse = evaluator.evaluate(cleanedPredictions)
     println(s"Root Mean Squared Error (RMSE) on test data = $rmse")
 
     spark.stop()
