@@ -46,11 +46,19 @@ object BasketballPrediction {
     cleanedDF.show(truncate = false)
     
 
-  // Step 1: Calculate total points per game for each team
+  //  Calculate total points per game for each team
     val teamPoints = cleanedDF.groupBy("GAME_ID", "TEAM_NAME")
       .agg(sum("POINTS_SCORED").as("TEAM_POINTS"))
 
-    // Step 2: Determine winning and losing teams for each game
+  //Calculate  the total points per player
+    val playerPoints = cleanedDF.groupBy("GAME_ID", "TEAM_NAME","PLAYER_NAME")
+      .agg(sum("POINTS_SCORED").as("TOTAl_PLAYER_POINTS"))
+
+    val playerTeamPoints = teamPoints.join(playerPoints, Seq("GAME_ID", "TEAM_NAME"))
+    
+    playerTeamPoints.show(truncate = false)
+
+    //  Determine winning and losing teams for each game
     val gameResults = teamPoints.groupBy("GAME_ID")
       .agg(
         max(struct(col("TEAM_POINTS"), col("TEAM_NAME"))).as("WINNER"),
@@ -70,36 +78,48 @@ object BasketballPrediction {
       "WINNING_POINTS",
       "explode(LOSERS) as LOSER"
     ).select(
-      col("GAME_ID"),
+      col("GAME_ID").as("GAMEID"),
       col("WINNING_TEAM"),
       col("WINNING_POINTS"),
       col("LOSER.TEAM_NAME").as("LOSING_TEAM"),
       col("LOSER.TEAM_POINTS").as("LOSING_POINTS")
     )
-
+  
     losingTeams.show(truncate = false)
 
-    // Step 3: Join with player data to associate player performance with winning and losing teams
-    val playerData = cleanedDF.join(losingTeams, cleanedDF("GAME_ID") === losingTeams("GAME_ID") && cleanedDF("TEAM_NAME") === losingTeams("WINNING_TEAM"), "inner")
-    .withColumnRenamed("POINTS_SCORED", "PLAYER_POINTS")
+    // Join with player data to associate player performance with winning and losing teams
+    val playerData = playerTeamPoints.join(losingTeams, playerTeamPoints("GAME_ID") === losingTeams("GAMEID") && playerTeamPoints("TEAM_NAME") === losingTeams("WINNING_TEAM"), "inner")
     .withColumnRenamed("TEAM_NAME", "TEAM_NAME_FROM_DATA")
-    .drop("GAME_ID")
+    .withColumn("PLAYER_CONTRIBUTION", col("TOTAl_PLAYER_POINTS") / col("TEAM_POINTS")) // Player's contribution
+    .drop("GAMEID")
 
-    playerData.show(truncate = false)
 
+  // Calculate average player contribution across all games
+  val playerAverageContribution = playerData.groupBy("PLAYER_NAME")
+  .agg(avg("PLAYER_CONTRIBUTION").as("AVG_PLAYER_CONTRIBUTION"))
 
-    // Step 4: Prepare features for the ML model
+   // Join the average player contribution with the original data
+    val dataWithAvgContribution = playerData.join(playerAverageContribution, Seq("PLAYER_NAME"));
+
+    dataWithAvgContribution.show(truncate = false)
+    
+    dataWithAvgContribution.repartition(1)  // Ensures a single partition
+    .write
+    .option("header", "true")
+    .csv("/spark-output/modelInputs");
+
+    // Prepare features for the ML model
     val assembler = new VectorAssembler()
-      .setInputCols(Array("WINNING_POINTS", "LOSING_POINTS", "PLAYER_POINTS"))
+      .setInputCols(Array("WINNING_POINTS", "LOSING_POINTS","AVG_PLAYER_CONTRIBUTION"))
       .setOutputCol("features")
 
-    val preparedData = assembler.transform(playerData)
-      .withColumn("label", col("PLAYER_POINTS"))
+    val preparedData = assembler.transform(dataWithAvgContribution)
+      .withColumn("label", col("TOTAl_PLAYER_POINTS"))
 
-    // Step 5: Split data into training and testing sets
+    // Split data into training and testing sets
     val Array(trainingData, testData) = preparedData.randomSplit(Array(0.8, 0.2))
 
-    // Step 6: Train the Linear Regression model
+    // Train the Linear Regression model
     val lr = new LinearRegression()
       .setLabelCol("label")
       .setFeaturesCol("features")
@@ -108,7 +128,7 @@ object BasketballPrediction {
 
     val lrModel = lr.fit(trainingData)
 
-    // Step 7: Make predictions
+    //  Make predictions
     val predictions = lrModel.transform(testData)
 
     val modelPrediction = predictions.select("PLAYER_NAME", "WINNING_TEAM", "LOSING_TEAM", "prediction")
@@ -120,20 +140,22 @@ object BasketballPrediction {
     .option("header", "true")
     .csv("/spark-output/modelPredictions");
 
-    // Step 8: Evaluate the model
-  import org.apache.spark.sql.functions._
+    // Evaluate the model
 
+  // clean the predictions to evaluation
   val cleanedPredictions = predictions
-    .filter(col("label").isNotNull && col("prediction").isNotNull) // Ensure no nulls
-    .filter(!col("label").isNaN && !col("prediction").isNaN) // Filter out NaN values
-    .filter(!(col("label") === Double.PositiveInfinity || col("label") === Double.NegativeInfinity)) // Filter out infinite values in label
-    .filter(!(col("prediction") === Double.PositiveInfinity || col("prediction") === Double.NegativeInfinity)) // Filter out infinite values in prediction
+    .filter(col("label").isNotNull && col("prediction").isNotNull) // filtering the null  values n both labels and prediction
+    .filter(!col("label").isNaN && !col("prediction").isNaN) // filtering the  NaN values in both labels and prediction
+    .filter(!(col("label") === Double.PositiveInfinity || col("label") === Double.NegativeInfinity)) // filtering the infinite values in label
+    .filter(!(col("prediction") === Double.PositiveInfinity || col("prediction") === Double.NegativeInfinity)) //  filtering  infinite values in prediction
 
+    // initializing evaluator
     val evaluator = new RegressionEvaluator()
       .setLabelCol("label")
       .setPredictionCol("prediction")
       .setMetricName("rmse")
 
+    //evaluate get the rmse value 
     val rmse = evaluator.evaluate(cleanedPredictions)
     println(s"Root Mean Squared Error (RMSE) on test data = $rmse")
 

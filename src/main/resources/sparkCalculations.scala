@@ -12,7 +12,7 @@ object NbaAnalysis {
       .getOrCreate()
 
     // File path to the MapReduce output
-    val filePath = "hdfs://namenode:8020/user/hadoop/outputp/part-r-00000" // Change to your file path
+    val filePath = "hdfs://namenode:8020/user/hadoop/outputp/part-r-00000"
 
     // Read the raw output from MapReduce (assuming it's text data with commas separating fields)
     val rawData = spark.read.textFile(filePath)

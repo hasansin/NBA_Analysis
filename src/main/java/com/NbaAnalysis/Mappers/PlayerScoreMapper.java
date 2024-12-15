@@ -14,7 +14,7 @@ public class PlayerScoreMapper extends Mapper<Object, Text, Text, IntWritable> {
 
     @Override
     protected void map(Object key, Text value, Context context) throws IOException, InterruptedException {
-        String[] fields = value.toString().split(","); // Adjust delimiter if necessary
+        String[] fields = value.toString().split(",");
 
         if (fields.length < 25) {
             return; // Ensure valid input

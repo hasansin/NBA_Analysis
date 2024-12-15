@@ -1,5 +1,7 @@
 import org.apache.spark.sql.{SparkSession, DataFrame, Row}
 import org.apache.spark.sql.types._
+import spark.implicits._
+
 
 object DynamicFieldCounter {
   def main(args: Array[String]): Unit = {
@@ -8,9 +10,8 @@ object DynamicFieldCounter {
       .master("local[*]")
       .getOrCreate()
 
-    import spark.implicits._
 
-    // File paths (adjust as needed)
+    // File paths for each MapReduce result
     val filePathPlayerScore ="hdfs://namenode:8020/user/hadoop/outputp/part-r-00000";
     val filePathteamScoreScore = "hdfs://namenode:8020/user/hadoop/outputt/part-r-00000";
     val filePathQauterScore =  "hdfs://namenode:8020/user/hadoop/outputq/part-r-00000";
