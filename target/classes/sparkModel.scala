@@ -1,10 +1,13 @@
+//import required values
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 import org.apache.spark.ml.feature.VectorAssembler
-import org.apache.spark.ml.regression.LinearRegression
+import org.apache.spark.ml.regression.{LinearRegression, DecisionTreeRegressor}
 import org.apache.spark.ml.evaluation.RegressionEvaluator
+import org.apache.spark.ml.tuning.{CrossValidator, ParamGridBuilder}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.types._
+
 
 object BasketballPrediction {
   def main(args: Array[String]): Unit = {
@@ -12,15 +15,16 @@ object BasketballPrediction {
       .appName("Basketball Player Prediction")
       .getOrCreate()
 
-
+    //get file path to get data from hadoop map redeucer output
     val filePath = "hdfs://namenode:8020/user/hadoop/outputp/part-r-00000"
 
+    // read data from above path
     val rawData = spark.read.textFile(filePath)
     // Debug: Print raw data
     println("Raw Data:")
     rawData.take(10).foreach(println)
 
-    // Filter malformed lines
+    // filter and see whether malformed lines are there
     val validData = rawData.filter(line => line.split(",").length == 5)
 
     // Debug: Count valid and malformed lines
@@ -30,7 +34,7 @@ object BasketballPrediction {
     println(s"Malformed rows: ${malformedData.count()}")
     malformedData.collect().foreach(line => println(s"Malformed line: $line"))
 
-    // Clean the data by removing unwanted spaces and splitting by comma
+    // Clean the data by removing unwanted spaces and then splitting data by comma to create the dataset
     val cleanedData = rawData
       .filter(line => line.split(",").length == 5) // Keep only valid lines
       .map { line =>
@@ -39,18 +43,18 @@ object BasketballPrediction {
       }
 
   
-    // Convert to DataFrame with column names
+    // add headers to the data frame
     val cleanedDF = cleanedData.toDF("GAME_ID", "TEAM_NAME", "PLAYER_NAME", "QUARTER", "POINTS_SCORED")
 
-    // Show the cleaned DataFrame to inspect
+    //display data set
     cleanedDF.show(truncate = false)
     
 
-  //  Calculate total points per game for each team
+  //  calculate the totala points scored by each team
     val teamPoints = cleanedDF.groupBy("GAME_ID", "TEAM_NAME")
       .agg(sum("POINTS_SCORED").as("TEAM_POINTS"))
 
-  //Calculate  the total points per player
+  // calculate the total point scored by each player
     val playerPoints = cleanedDF.groupBy("GAME_ID", "TEAM_NAME","PLAYER_NAME")
       .agg(sum("POINTS_SCORED").as("TOTAl_PLAYER_POINTS"))
 
@@ -120,45 +124,79 @@ object BasketballPrediction {
     val Array(trainingData, testData) = preparedData.randomSplit(Array(0.8, 0.2))
 
     // Train the Linear Regression model
-    val lr = new LinearRegression()
+    val linearRegression = new LinearRegression()
       .setLabelCol("label")
       .setFeaturesCol("features")
       .setMaxIter(100)
       .setRegParam(0.3)
 
-    val lrModel = lr.fit(trainingData)
+    val decisionTree = new DecisionTreeRegressor()
+      .setLabelCol("label")
+      .setFeaturesCol("features")
+      .setMaxDepth(5)
 
-    //  Make predictions
-    val predictions = lrModel.transform(testData)
+    // Cross-Validation for Linear Regression
+    val paramGridLR = new ParamGridBuilder()
+      .addGrid(linearRegression.regParam, Array(0.01, 0.1, 0.3))
+      .addGrid(linearRegression.maxIter, Array(50, 100))
+      .build()
 
-    val modelPrediction = predictions.select("PLAYER_NAME", "WINNING_TEAM", "LOSING_TEAM", "prediction")
-    
-    modelPrediction.show(truncate = false)
-
-    modelPrediction.repartition(1)  // Ensures a single partition
-    .write
-    .option("header", "true")
-    .csv("/spark-output/modelPredictions");
-
-    // Evaluate the model
-
-  // clean the predictions to evaluation
-  val cleanedPredictions = predictions
-    .filter(col("label").isNotNull && col("prediction").isNotNull) // filtering the null  values n both labels and prediction
-    .filter(!col("label").isNaN && !col("prediction").isNaN) // filtering the  NaN values in both labels and prediction
-    .filter(!(col("label") === Double.PositiveInfinity || col("label") === Double.NegativeInfinity)) // filtering the infinite values in label
-    .filter(!(col("prediction") === Double.PositiveInfinity || col("prediction") === Double.NegativeInfinity)) //  filtering  infinite values in prediction
-
-    // initializing evaluator
     val evaluator = new RegressionEvaluator()
       .setLabelCol("label")
       .setPredictionCol("prediction")
       .setMetricName("rmse")
 
-    //evaluate get the rmse value 
-    val rmse = evaluator.evaluate(cleanedPredictions)
-    println(s"Root Mean Squared Error (RMSE) on test data = $rmse")
+    val crossValidatorLR = new CrossValidator()
+      .setEstimator(linearRegression) // model tobe tranined
+      .setEvaluator(evaluator) // metric to evaluate the model
+      .setEstimatorParamMaps(paramGridLR) // hyper parameter combination to test
+      .setNumFolds(5) // number of folds in cross validation
 
+    val cvModelLR = crossValidatorLR.fit(trainingData)
+
+    // Evaluate Linear Regression
+    val predictionsLR = cvModelLR.transform(testData)
+    val rmseLR = evaluator.evaluate(predictionsLR)
+    println(s"Linear Regression RMSE: $rmseLR")
+
+    // Cross-Validation for Decision Tree
+    val paramGridDT = new ParamGridBuilder()
+      .addGrid(decisionTree.maxDepth, Array(3, 5, 10))
+      .addGrid(decisionTree.maxBins, Array(16, 32, 64))
+      .build()
+
+    val crossValidatorDT = new CrossValidator()
+      .setEstimator(decisionTree) // model tobe tranined
+      .setEvaluator(evaluator) // metric to evaluate the model
+      .setEstimatorParamMaps(paramGridDT) // hyper parameter combination to test
+      .setNumFolds(5) // number of folds in cross validation
+
+    val cvModelDT = crossValidatorDT.fit(trainingData)
+
+    // Evaluate Decision Tree
+    val predictionsDT = cvModelDT.transform(testData)
+    val rmseDT = evaluator.evaluate(predictionsDT)
+    println(s"Decision Tree RMSE: $rmseDT")
+
+    // Select the Best Model
+    val (bestModel, bestModelType) = if (rmseLR < rmseDT) {
+      println("Linear Regression is the better model.")
+      (cvModelLR, "Linear Regression")
+    } else {
+      println("Decision Tree is the better model.")
+      (cvModelDT, "Decision Tree")
+    }
+
+    //  Use the Best Model for Predictions
+    val predictions = bestModel.transform(testData)
+
+    val PredictedData = predictions.select("PLAYER_NAME", "WINNING_TEAM","LOSING_TEAM", "label", "prediction")
+    preparedData.show(truncate = false)
+
+    PredictedData.repartition(1)  // Ensures a single partition
+    .write
+    .option("header", "true")
+    .csv("/spark-output/PredictedData");
     spark.stop()
   }
 }
